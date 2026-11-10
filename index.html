@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Egzamin online</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- START -->
+  <section id="s-home" class="screen card">
+    <h1>Egzamin online z nadzorem</h1>
+    <p class="muted">Wersja MVP do testów. Wymaga komputera, przeglądarki Chrome lub Edge i kamery.</p>
+    <div class="row">
+      <button class="primary" data-go="s-candidate">Rozpocznij egzamin</button>
+      <button data-go="s-admin">Panel egzaminatora</button>
+    </div>
+    <p id="exam-source" class="muted small"></p>
+  </section>
+
+  <!-- PANEL EGZAMINATORA -->
+  <section id="s-admin" class="screen card hidden">
+    <h2>Panel egzaminatora</h2>
+    <h3>1. Pytania (CSV)</h3>
+    <p class="muted small">Kolumny: <code>pytanie;a;b;c;d;poprawna;kategoria;punkty</code>. Separator średnik lub przecinek, kodowanie UTF-8. <a href="przyklad.csv" download>Pobierz przykład</a>.</p>
+    <input type="file" id="csv-file" accept=".csv,text/csv">
+    <div id="csv-report" class="small"></div>
+
+    <h3>2. Ustawienia</h3>
+    <div class="grid">
+      <label>Tytuł egzaminu <input id="cfg-title" value="Egzamin próbny"></label>
+      <label>Liczba losowanych pytań <input id="cfg-count" type="number" min="1" value="10"></label>
+      <label>Czas całkowity (min) <input id="cfg-total" type="number" min="1" value="15"></label>
+      <label>Czas na pytanie (s, 0 = bez limitu) <input id="cfg-per" type="number" min="0" value="60"></label>
+      <label>Próg zaliczenia (%) <input id="cfg-pass" type="number" min="0" max="100" value="60"></label>
+      <label>Dozwolone wyjścia z pełnego ekranu <input id="cfg-exits" type="number" min="0" value="2"></label>
+      <label class="check"><input id="cfg-shuffle" type="checkbox" checked> Losuj kolejność odpowiedzi</label>
+      <label class="check"><input id="cfg-back" type="checkbox"> Pozwól wracać do pytań</label>
+      <label class="check"><input id="cfg-camera" type="checkbox" checked> Wymagaj kamery</label>
+    </div>
+    <div class="row">
+      <button class="primary" id="btn-save">Zapisz na tym komputerze</button>
+      <button id="btn-export">Pobierz egzamin.json (do wdrożenia)</button>
+      <button data-go="s-reports">Raporty prób</button>
+      <button data-go="s-home">Wróć</button>
+    </div>
+    <p id="admin-msg" class="small"></p>
+  </section>
+
+  <!-- RAPORTY -->
+  <section id="s-reports" class="screen card hidden wide">
+    <h2>Raporty prób (zapisane na tym komputerze)</h2>
+    <div id="reports-list"></div>
+    <div class="row"><button data-go="s-admin">Wróć</button></div>
+  </section>
+
+  <!-- DANE + ZGODA -->
+  <section id="s-candidate" class="screen card hidden">
+    <h2 id="cand-title">Egzamin</h2>
+    <label>Imię i nazwisko <input id="cand-name" autocomplete="name"></label>
+    <label>Numer / e-mail (opcjonalnie) <input id="cand-id"></label>
+    <div class="consent small">
+      <p><strong>Informacja o nadzorze.</strong> Podczas egzaminu kamera jest analizowana na Twoim komputerze przez model AI, który wykrywa m.in. brak twarzy, drugą osobę, telefon lub książkę w kadrze i odwracanie wzroku. Obraz wideo nie jest wysyłany ani nagrywany. Przy podejrzanym zdarzeniu zapisywany jest pojedynczy zrzut z kamery oraz informacja o zdarzeniu (np. wyjście z pełnego ekranu, przełączenie okna, próba kopiowania).</p>
+      <p>Zdarzenia nie powodują automatycznego oblania. Ocenia je egzaminator, a Ty możesz się odwołać. Dane są przechowywane przez okres wskazany przez organizatora egzaminu.</p>
+    </div>
+    <label class="check"><input type="checkbox" id="cand-consent"> Zapoznałem/am się z informacją i zgadzam się na nadzór kamerą podczas egzaminu.</label>
+    <div class="row">
+      <button class="primary" id="btn-to-camera">Dalej: test kamery</button>
+      <button data-go="s-home">Wróć</button>
+    </div>
+    <p id="cand-msg" class="small error"></p>
+  </section>
+
+  <!-- TEST KAMERY -->
+  <section id="s-camera" class="screen card hidden">
+    <h2>Test kamery i kalibracja</h2>
+    <div class="cam-wrap"><video id="cam-preview" autoplay playsinline muted></video></div>
+    <ul id="checks" class="checks">
+      <li id="ck-browser">Przeglądarka</li>
+      <li id="ck-cam">Kamera</li>
+      <li id="ck-models">Modele AI</li>
+      <li id="ck-face">Jedna twarz w kadrze, patrzysz w ekran</li>
+      <li id="ck-screens">Jeden monitor</li>
+    </ul>
+    <p class="small muted">Usiądź prosto, twarz na środku kadru, dobre oświetlenie z przodu. Na biurku nie powinno być telefonu ani kartek.</p>
+    <div class="row">
+      <button class="primary" id="btn-start" disabled>Rozpocznij egzamin (pełny ekran)</button>
+    </div>
+    <p id="cam-msg" class="small"></p>
+  </section>
+
+  <!-- EGZAMIN -->
+  <section id="s-exam" class="screen hidden">
+    <header class="exam-bar">
+      <span id="q-progress"></span>
+      <span id="q-timer" class="timer"></span>
+      <span id="t-total" class="timer"></span>
+    </header>
+    <div class="card exam-card noselect">
+      <div id="q-text" class="q-text"></div>
+      <div id="q-answers" class="answers"></div>
+      <div class="row">
+        <button id="btn-prev" class="hidden">Poprzednie</button>
+        <button id="btn-next" class="primary">Dalej</button>
+      </div>
+    </div>
+    <div id="warn" class="warn hidden"></div>
+    <div id="watermark" class="watermark"></div>
+    <div class="pip"><video id="cam-exam" autoplay playsinline muted></video><span id="pip-status"></span></div>
+  </section>
+
+  <!-- WYNIK -->
+  <section id="s-result" class="screen card hidden wide">
+    <h2>Egzamin zakończony</h2>
+    <div id="result-summary"></div>
+    <div class="row">
+      <button id="btn-download">Pobierz raport (JSON)</button>
+      <button data-go="s-home">Strona główna</button>
+    </div>
+    <h3>Zdarzenia nadzoru</h3>
+    <div id="result-events"></div>
+  </section>
+
+</div>
+<canvas id="snap" width="320" height="240" class="hidden"></canvas>
+<script type="module" src="app.js"></script>
+</body>
+</html>
