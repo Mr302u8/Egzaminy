@@ -3,7 +3,8 @@ import { Proctor } from './proctor.js';
 const $ = id => document.getElementById(id);
 const LS_CFG = 'egz_config', LS_REP = 'egz_reports';
 const WEIGHTS = {
-  no_face: 3, multi_face: 5, look_away: 2, phone: 5, book: 4, person: 5, dark: 4, camera_off: 5,
+  no_face: 3, multi_face: 5, phone: 5, book: 4, person: 5, dark: 4, camera_off: 5,
+  look_down: 2, look_side: 2, look_up: 1, frozen: 4, pointer_unlock: 2, start_photo: 0,
   tab_hidden: 3, focus_lost: 2, fullscreen_exit: 3, clipboard: 1, blocked_key: 1,
   dom_injection: 3, extension_present: 2, multi_monitor: 3, window_resized: 1,
 };
@@ -13,6 +14,7 @@ let config = null, configSource = '';
 let proctor = null, stream = null;
 let exam = null; // stan trwającej próby
 let lastReport = null;
+const DEBUG = new URLSearchParams(location.search).has('debug');
 
 /* ---------- nawigacja ---------- */
 function show(id) {
@@ -40,7 +42,7 @@ async function loadConfig() {
       const r = await fetch('przyklad.csv');
       const { questions } = parseCSV(await r.text());
       config = { title: 'Egzamin próbny', count: 10, totalMin: 15, perQ: 60, pass: 60, exits: 2,
-                 shuffle: true, back: false, camera: true, questions };
+                 shuffle: true, back: false, camera: true, keyboardOnly: true, questions };
       configSource = 'pytania przykładowe (przyklad.csv)';
     } catch {}
   }
@@ -105,6 +107,7 @@ function fillAdmin() {
   $('cfg-shuffle').checked = c.shuffle ?? true;
   $('cfg-back').checked = c.back ?? false;
   $('cfg-camera').checked = c.camera ?? true;
+  $('cfg-kbd').checked = c.keyboardOnly ?? true;
   adminQuestions = c.questions || null;
   $('csv-report').textContent = adminQuestions ? `Obecna pula: ${adminQuestions.length} pytań.` : '';
 }
@@ -131,7 +134,7 @@ function readAdmin() {
     count: Math.min(num('cfg-count', 1), adminQuestions.length),
     totalMin: num('cfg-total', 1), perQ: num('cfg-per', 0), pass: Math.min(100, num('cfg-pass', 0)),
     exits: num('cfg-exits', 0), shuffle: $('cfg-shuffle').checked, back: $('cfg-back').checked,
-    camera: $('cfg-camera').checked, questions: adminQuestions,
+    camera: $('cfg-camera').checked, keyboardOnly: $('cfg-kbd').checked, questions: adminQuestions,
   };
 }
 $('btn-save').addEventListener('click', () => {
@@ -152,6 +155,7 @@ $('btn-to-camera').addEventListener('click', async () => {
   if (!config) return ($('cand-msg').textContent = 'Brak skonfigurowanego egzaminu.');
   if (!$('cand-name').value.trim()) return ($('cand-msg').textContent = 'Podaj imię i nazwisko.');
   if (!$('cand-consent').checked) return ($('cand-msg').textContent = 'Bez zgody na nadzór nie można rozpocząć egzaminu.');
+  if (!$('cand-devices').checked) return ($('cand-msg').textContent = 'Potwierdź, że nie masz okularów ani słuchawek z kamerą/elektroniką.');
   $('cand-msg').textContent = '';
   show('s-camera');
   await setupCamera();
@@ -180,8 +184,9 @@ async function setupCamera() {
   }
   $('cam-msg').textContent = 'Ładowanie modeli AI (pierwszy raz kilka–kilkanaście sekund)…';
   try {
-    proctor = new Proctor({ onEvent: ev => logEvent(ev.type, ev.label, ev.detail, ev.img), snapCanvas: $('snap') });
+    proctor = new Proctor({ onEvent: ev => logEvent(ev.type, ev.label, ev.detail, ev.img), onStatus: showStatus, snapCanvas: $('snap') });
     await proctor.init($('cam-preview'));
+    if (DEBUG) window.__proctor = proctor;
     mark('ck-models', true, 'Modele AI: OK');
   } catch (e) {
     console.error(e);
@@ -228,13 +233,17 @@ $('btn-start').addEventListener('click', async () => {
     qs: picked, i: 0, qStart: now, events: [], snaps: 0, fsExits: 0, status: 'w toku',
   };
   $('watermark').textContent = `${exam.candidate.name} ${exam.candidate.id} `.repeat(400);
-  if (stream) { $('cam-exam').srcObject = stream; $('pip-status').textContent = 'Nadzór aktywny'; }
+  if (stream) { $('cam-exam').srcObject = stream; $('cam-exam').play().catch(() => {}); }
   else $('pip-status').textContent = '';
   show('s-exam');
+  if (proctor) proctor.setVideo($('cam-exam'));
+  document.body.classList.toggle('kbd-only', config.keyboardOnly !== false);
+  lockInput();
   attachGuards();
   scanExistingInjections();
   if (window.screen.isExtended) logEvent('multi_monitor', 'Drugi monitor', 'przy starcie');
   proctor?.start();
+  if (proctor) logEvent('start_photo', 'Zdjęcie startowe (sprawdź okulary, słuchawki, otoczenie)', '', proctor.snapshot());
   renderQuestion();
   exam.timer = setInterval(tickTimers, 250);
 });
@@ -249,13 +258,15 @@ function renderQuestion() {
   const box = $('q-answers'); box.innerHTML = '';
   q.order.forEach((orig, pos) => {
     const b = document.createElement('button');
-    b.textContent = `${'ABCD'[pos]}. ${q.a[orig]}`;
     if (q.chosen === orig) b.classList.add('sel');
-    b.addEventListener('click', () => { q.chosen = orig; renderSelection(); });
+    b.innerHTML = `<kbd>${pos + 1}</kbd> `; b.append(`${'ABCD'[pos]}. ${q.a[orig]}`);
+    b.tabIndex = -1;
+    if (config.keyboardOnly === false) b.addEventListener('click', () => { q.chosen = orig; renderSelection(); });
     box.append(b);
   });
   $('btn-prev').classList.toggle('hidden', !config.back || exam.i === 0);
-  $('btn-next').textContent = exam.i === exam.qs.length - 1 ? 'Zakończ egzamin' : 'Dalej';
+  $('btn-next').textContent = exam.i === exam.qs.length - 1 ? 'Zakończ egzamin (Enter)' : 'Dalej (Enter)';
+  $('btn-prev').textContent = 'Poprzednie (←)';
 }
 function renderSelection() {
   const q = exam.qs[exam.i];
@@ -268,8 +279,10 @@ $('btn-prev').addEventListener('click', () => { leaveQuestion(); exam.i--; rende
 
 function nextQuestion(auto) {
   if (!exam) return;
-  if (!auto && exam.i === exam.qs.length - 1 && exam.qs.some(q => q.chosen === null)
-      && !confirm('Nie wszystkie pytania mają odpowiedź. Zakończyć egzamin?')) return;
+  if (!auto && exam.i === exam.qs.length - 1 && exam.qs.some(q => q.chosen === null) && Date.now() - (exam.confirmAt || 0) > 5000) {
+    exam.confirmAt = Date.now();
+    return showWarn('Nie wszystkie pytania mają odpowiedź. Naciśnij Enter jeszcze raz, aby zakończyć egzamin.');
+  }
   leaveQuestion();
   if (exam.i >= exam.qs.length - 1) return finish('ukończony');
   exam.i++; renderQuestion();
@@ -320,8 +333,25 @@ function attachGuards() {
       || (mod && e.shiftKey && ['i', 'j', 'c', 'k'].includes(k))
       || (e.metaKey && e.altKey && ['i', 'j', 'c'].includes(k))
       || k === 'f12' || k === 'printscreen';
-    if (blocked) { e.preventDefault(); logEvent('blocked_key', 'Zablokowany skrót klawiszowy', shortcut(e)); }
+    if (blocked) { e.preventDefault(); logEvent('blocked_key', 'Zablokowany skrót klawiszowy', shortcut(e)); return; }
+    if (mod || e.altKey || e.repeat) return;
+    // Sterowanie egzaminem tylko z klawiatury: 1–4 / A–D wybór, Enter lub → dalej, ← wstecz.
+    const pos = { '1': 0, '2': 1, '3': 2, '4': 3, a: 0, b: 1, c: 2, d: 3 }[k];
+    if (pos !== undefined) { e.preventDefault(); const q = exam.qs[exam.i]; q.chosen = q.order[pos]; renderSelection(); }
+    else if (k === 'enter' || k === 'arrowright') { e.preventDefault(); nextQuestion(false); }
+    else if (k === 'arrowleft' && config.back && exam.i > 0) { e.preventDefault(); leaveQuestion(); exam.i--; renderQuestion(); }
+    else if (k === 'tab') e.preventDefault();
+    if (exam && !document.pointerLockElement) lockInput();
   }, true);
+  // Myszka: w trybie klawiatury kliknięcia są ignorowane, kursor ukryty i zablokowany w oknie.
+  for (const t of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'wheel']) on(window, t, e => {
+    if (config.keyboardOnly === false || e.target.closest?.('#warn')) return;
+    e.preventDefault(); e.stopPropagation();
+  }, { capture: true, passive: false });
+  on(document, 'pointerlockchange', () => {
+    if (!exam || document.pointerLockElement || config.keyboardOnly === false) return;
+    logEvent('pointer_unlock', 'Odblokowanie myszki', 'kursor mógł opuścić okno egzaminu');
+  });
   on(window, 'keyup', e => { if (e.key === 'PrintScreen') logEvent('blocked_key', 'Zrzut ekranu (PrintScreen)', ''); });
   on(window, 'resize', () => {
     const now = Date.now();
@@ -354,7 +384,25 @@ function scanExistingInjections() {
   if (all.length) logEvent('extension_present', 'Elementy obce na stronie przy starcie (rozszerzenia)', all.slice(0, 5).map(describe).join(', '));
 }
 function shortcut(e) { return [e.ctrlKey && 'Ctrl', e.metaKey && 'Cmd', e.altKey && 'Alt', e.shiftKey && 'Shift', e.key].filter(Boolean).join('+'); }
-function detachGuards() { guards.forEach(f => f()); guards = []; mo?.disconnect(); }
+function detachGuards() {
+  guards.forEach(f => f()); guards = []; mo?.disconnect();
+  document.body.classList.remove('kbd-only');
+  try { document.exitPointerLock(); navigator.keyboard?.unlock?.(); } catch {}
+}
+
+// Blokada myszki (Pointer Lock) i klawiszy systemowych w pełnym ekranie (Keyboard Lock, Chrome/Edge).
+function lockInput() {
+  if (config.keyboardOnly === false) return;
+  try { const r = document.body.requestPointerLock({ unadjustedMovement: true }); r?.catch?.(() => document.body.requestPointerLock()?.catch?.(() => {})); } catch {}
+  try { navigator.keyboard?.lock?.().catch(() => {}); } catch {}
+}
+
+function showStatus(st) {
+  const el = $('pip-status'); if (!el || !exam) return;
+  const face = st.faces === 1 ? 'twarz ✓' : st.faces === 0 ? 'brak twarzy' : `${st.faces} twarze`;
+  el.textContent = `Nadzór: ${face}, wzrok ${st.looking}` + (DEBUG ? ` · ${st.delegate} ${Math.round(st.faceMs || 0)}/${Math.round(st.objMs || 0)} ms co ${st.objEvery} · ${st.why} · tel ${Math.round(st.phone * 100)}% · ${st.objects.map(o => o.name + ' ' + Math.round(o.score * 100)).join(', ')}` : '');
+  document.querySelector('.pip').classList.toggle('alert', st.faces !== 1 || st.looking !== 'w ekran');
+}
 
 let warnTimer;
 function showWarn(text, withButton) {
@@ -373,12 +421,14 @@ function showWarn(text, withButton) {
 /* ---------- zdarzenia ---------- */
 function logEvent(type, label, detail = '', img = null) {
   if (!exam || exam.status !== 'w toku') return;
-  if (!img && proctor && type !== 'blocked_key' && type !== 'clipboard') img = proctor.snapshot();
+  if (!img && proctor && !['blocked_key', 'clipboard', 'start_photo'].includes(type)) img = proctor.snapshot();
   if (img && exam.snaps >= MAX_SNAPS) img = null;
   if (img) exam.snaps++;
   const ev = { t: Date.now() - exam.startedAt, at: new Date().toISOString(), type, label, detail, weight: WEIGHTS[type] ?? 1, q: exam.i + 1, img };
   exam.events.push(ev);
-  const camera = ['no_face', 'multi_face', 'look_away', 'phone', 'book', 'person', 'dark', 'camera_off'].includes(type);
+  if (DEBUG) window.__events = exam.events;
+  if (type === 'start_photo') return;
+  const camera = ['no_face', 'multi_face', 'look_down', 'look_side', 'look_up', 'phone', 'book', 'person', 'dark', 'frozen', 'camera_off'].includes(type);
   if (camera) {
     document.querySelector('.pip').classList.add('alert');
     setTimeout(() => document.querySelector('.pip')?.classList.remove('alert'), 3000);

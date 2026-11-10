@@ -39,3 +39,9 @@ th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertic
 td img{width:120px;border-radius:4px}
 .risk-low{color:var(--ok)}.risk-mid{color:var(--warn)}.risk-high{color:var(--bad)}
 code{background:#eef1f4;padding:1px 4px;border-radius:4px}
+body.kbd-only, body.kbd-only *{cursor:none!important}
+body:not(.kbd-only) .kbd-hint{display:none}
+.kbd-hint{max-width:760px;margin:0 auto 8px;text-align:center}
+kbd{display:inline-block;min-width:22px;padding:1px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;background:#f7f9fc;font:600 13px/1.4 ui-monospace,Menlo,monospace;text-align:center;color:var(--ink)}
+.answers kbd{margin-right:6px}
+.pip span{font-size:12px;line-height:1.3}

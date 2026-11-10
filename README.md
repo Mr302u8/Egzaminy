@@ -8,8 +8,16 @@ limitami czasu, losowaniem i nadzorem kamerą działającym w przeglądarce zdaj
   próg zaliczenia, losowanie odpowiedzi, powrót do pytań, limit wyjść z pełnego ekranu.
 - Ekran zgody (informacja RODO), test kamery, sprawdzenie przeglądarki i drugiego monitora, kalibracja głowy.
 - Egzamin w pełnym ekranie, znak wodny z imieniem, podgląd kamery w rogu.
-- Wykrywanie z kamery: brak twarzy, wiele twarzy, odwrócona głowa (w dół / w bok / w górę),
-  telefon, książka/kartki, druga osoba, zasłonięta kamera.
+- Wykrywanie z kamery: brak twarzy, wiele twarzy, patrzenie w dół / w bok / w górę (ruch głowy
+  ORAZ ruch samych oczu – blendshapes MediaPipe), telefon, książka/kartki, druga osoba,
+  zasłonięta lub zamrożona kamera. Model przedmiotów EfficientDet-Lite2, a na wolnych
+  komputerach automatycznie Lite0.
+- Tryb „tylko klawiatura” (domyślnie włączony): odpowiedzi 1–4 lub A–D, Enter = dalej,
+  kursor ukryty i zablokowany w oknie (Pointer Lock), kliknięcia ignorowane, odblokowanie myszki
+  jest zapisywane jako zdarzenie.
+- Zdjęcie startowe w raporcie + oświadczenie o braku okularów/słuchawek z kamerą.
+- Tryb diagnostyczny: dodaj `?debug=1` do adresu – pod podglądem kamery widać na żywo
+  liczbę twarzy, kierunek wzroku, wartości i pewność wykrycia telefonu.
 - Wykrywanie w przeglądarce: przełączenie karty, utrata fokusu (z czasem), wyjście z pełnego ekranu,
   kopiuj/wklej, skróty (Ctrl+C/V/P/U, F12, narzędzia deweloperskie, PrintScreen), zmniejszenie okna,
   elementy wstrzyknięte przez rozszerzenia (np. panele AI), drugi monitor.
@@ -19,7 +27,7 @@ limitami czasu, losowaniem i nadzorem kamerą działającym w przeglądarce zdaj
 - Wszystko jest w przeglądarce: klucz odpowiedzi jest w pliku egzaminu, a raporty zapisują się
   tylko na komputerze zdającego (localStorage) lub do pobrania jako JSON. Do prawdziwych egzaminów
   potrzebny jest serwer (Supabase) – ocenianie, zegar i raporty po stronie serwera.
-- Progi detekcji są startowe – trzeba je dostroić na pilotażu (plik `proctor.js`, stałe na górze).
+- Progi detekcji są startowe – trzeba je dostroić na pilotażu (plik `proctor.js`, `RULES` i `LIMITS` na górze).
 
 ## Uruchomienie lokalnie (Mac)
 ```

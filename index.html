@@ -39,6 +39,7 @@
       <label class="check"><input id="cfg-shuffle" type="checkbox" checked> Losuj kolejność odpowiedzi</label>
       <label class="check"><input id="cfg-back" type="checkbox"> Pozwól wracać do pytań</label>
       <label class="check"><input id="cfg-camera" type="checkbox" checked> Wymagaj kamery</label>
+      <label class="check"><input id="cfg-kbd" type="checkbox" checked> Tylko klawiatura (myszka zablokowana)</label>
     </div>
     <div class="row">
       <button class="primary" id="btn-save">Zapisz na tym komputerze</button>
@@ -66,6 +67,7 @@
       <p>Zdarzenia nie powodują automatycznego oblania. Ocenia je egzaminator, a Ty możesz się odwołać. Dane są przechowywane przez okres wskazany przez organizatora egzaminu.</p>
     </div>
     <label class="check"><input type="checkbox" id="cand-consent"> Zapoznałem/am się z informacją i zgadzam się na nadzór kamerą podczas egzaminu.</label>
+    <label class="check"><input type="checkbox" id="cand-devices"> Nie mam na sobie okularów ani słuchawek z kamerą lub elektroniką (np. Ray-Ban Meta), smartwatcha ani słuchawek w uszach. Okulary korekcyjne pokażę do kamery.</label>
     <div class="row">
       <button class="primary" id="btn-to-camera">Dalej: test kamery</button>
       <button data-go="s-home">Wróć</button>
@@ -98,6 +100,7 @@
       <span id="q-timer" class="timer"></span>
       <span id="t-total" class="timer"></span>
     </header>
+    <p class="kbd-hint small muted">Odpowiadaj klawiszami <kbd>1</kbd>–<kbd>4</kbd> lub <kbd>A</kbd>–<kbd>D</kbd>. <kbd>Enter</kbd> = następne pytanie. Myszka jest wyłączona.</p>
     <div class="card exam-card noselect">
       <div id="q-text" class="q-text"></div>
       <div id="q-answers" class="answers"></div>
