@@ -15,6 +15,12 @@ limitami czasu, losowaniem i nadzorem kamerą działającym w przeglądarce zdaj
 - Tryb „tylko klawiatura” (domyślnie włączony): odpowiedzi 1–4 lub A–D, Enter = dalej,
   kursor ukryty i zablokowany w oknie (Pointer Lock), kliknięcia ignorowane, odblokowanie myszki
   jest zapisywane jako zdarzenie.
+- Śledzenie źrenic (punkty tęczówek 468–477 z MediaPipe Face Landmarker) i kątów głowy
+  (macierz transformacji twarzy), kamera w 720p. Przed egzaminem kalibracja wzroku na 5 punktach
+  ekranu (środek + rogi): wyznacza osobisty zakres „patrzę w ekran”, a spojrzenie poza niego
+  (+ margines z `MARGINS` w `proctor.js`) jest zdarzeniem. Wykrywanie odsunięcia/przesunięcia twarzy.
+- Podgląd śledzenia: kadr przybliżony na twarz z zaznaczonymi oczami i źrenicami
+  (zielone = patrzy w ekran, czerwone = poza ekran).
 - Zdjęcie startowe w raporcie + oświadczenie o braku okularów/słuchawek z kamerą.
 - Tryb diagnostyczny: dodaj `?debug=1` do adresu – pod podglądem kamery widać na żywo
   liczbę twarzy, kierunek wzroku, wartości i pewność wykrycia telefonu.

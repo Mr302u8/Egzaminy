@@ -1,10 +1,10 @@
-import { Proctor } from './proctor.js';
+import { Proctor, drawFaceView } from './proctor.js';
 
 const $ = id => document.getElementById(id);
 const LS_CFG = 'egz_config', LS_REP = 'egz_reports';
 const WEIGHTS = {
   no_face: 3, multi_face: 5, phone: 5, book: 4, person: 5, dark: 4, camera_off: 5,
-  look_down: 2, look_side: 2, look_up: 1, frozen: 4, pointer_unlock: 2, start_photo: 0,
+  look_down: 2, look_side: 2, look_up: 1, frozen: 4, face_moved: 2, calibration_failed: 2, pointer_unlock: 2, start_photo: 0,
   tab_hidden: 3, focus_lost: 2, fullscreen_exit: 3, clipboard: 1, blocked_key: 1,
   dom_injection: 3, extension_present: 2, multi_monitor: 3, window_resized: 1,
 };
@@ -174,9 +174,11 @@ async function setupCamera() {
     await checkScreens(); $('btn-start').disabled = false; return;
   }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
+    // Wyższa rozdzielczość = więcej pikseli na oko (źrenice). 720p obsługuje praktycznie każda kamera laptopa.
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: 'user' }, audio: false });
     $('cam-preview').srcObject = stream;
-    await $('cam-preview').play();
+    $('feed').srcObject = stream;
+    await Promise.all([$('cam-preview').play(), $('feed').play()]);
     mark('ck-cam', true, 'Kamera: OK');
   } catch (e) {
     mark('ck-cam', false, 'Kamera: brak dostępu – zezwól na kamerę w pasku adresu i odśwież stronę');
@@ -185,8 +187,9 @@ async function setupCamera() {
   $('cam-msg').textContent = 'Ładowanie modeli AI (pierwszy raz kilka–kilkanaście sekund)…';
   try {
     proctor = new Proctor({ onEvent: ev => logEvent(ev.type, ev.label, ev.detail, ev.img), onStatus: showStatus, snapCanvas: $('snap') });
-    await proctor.init($('cam-preview'));
+    await proctor.init($('feed'));
     if (DEBUG) window.__proctor = proctor;
+    startViews();
     mark('ck-models', true, 'Modele AI: OK');
   } catch (e) {
     console.error(e);
@@ -223,6 +226,10 @@ const shuffle = arr => { const a = [...arr]; for (let i = a.length - 1; i > 0; i
 $('btn-start').addEventListener('click', async () => {
   try { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); }
   catch { $('cam-msg').textContent = 'Nie udało się włączyć pełnego ekranu.'; return; }
+  if (proctor) {
+    const ok = await gazeCalibration();
+    if (!ok) $('cam-msg').textContent = 'Kalibracja wzroku nieudana – używam pozycji startowej.';
+  }
   const picked = shuffle(config.questions).slice(0, config.count).map(q => ({
     ...q, order: config.shuffle ? shuffle([0, 1, 2, 3]) : [0, 1, 2, 3], chosen: null, timeMs: 0,
   }));
@@ -233,16 +240,15 @@ $('btn-start').addEventListener('click', async () => {
     qs: picked, i: 0, qStart: now, events: [], snaps: 0, fsExits: 0, status: 'w toku',
   };
   $('watermark').textContent = `${exam.candidate.name} ${exam.candidate.id} `.repeat(400);
-  if (stream) { $('cam-exam').srcObject = stream; $('cam-exam').play().catch(() => {}); }
-  else $('pip-status').textContent = '';
+  if (!stream) { $('pip-status').textContent = ''; document.querySelector('.pip').classList.add('hidden'); }
   show('s-exam');
-  if (proctor) proctor.setVideo($('cam-exam'));
   document.body.classList.toggle('kbd-only', config.keyboardOnly !== false);
   lockInput();
   attachGuards();
   scanExistingInjections();
   if (window.screen.isExtended) logEvent('multi_monitor', 'Drugi monitor', 'przy starcie');
   proctor?.start();
+  if (proctor && !proctor.box) logEvent('calibration_failed', 'Kalibracja wzroku nieudana', 'za mało klatek z widoczną twarzą');
   if (proctor) logEvent('start_photo', 'Zdjęcie startowe (sprawdź okulary, słuchawki, otoczenie)', '', proctor.snapshot());
   renderQuestion();
   exam.timer = setInterval(tickTimers, 250);
@@ -373,12 +379,12 @@ function attachGuards() {
 function isOurs(n) {
   const app = $('app');
   if (app.contains(n)) return !n.tagName.includes('-');
-  return n.id === 'snap' || n.tagName === 'SCRIPT' && n.src?.includes('cdn.jsdelivr.net/npm/@mediapipe');
+  return n.id === 'snap' || n.id === 'feed' || n.tagName === 'SCRIPT' && n.src?.includes('cdn.jsdelivr.net/npm/@mediapipe');
 }
 function describe(n) { return `<${n.tagName.toLowerCase()}${n.id ? ' id=' + n.id : ''}${n.className && typeof n.className === 'string' ? ' class=' + n.className.slice(0, 40) : ''}>`; }
 function scanExistingInjections() {
   const foreign = [...document.documentElement.querySelectorAll('*')].filter(n =>
-    !$('app').contains(n) && !['HEAD', 'BODY', 'META', 'TITLE', 'LINK', 'SCRIPT', 'STYLE'].includes(n.tagName) && n.id !== 'snap' && n.parentElement && !n.closest('head'));
+    !$('app').contains(n) && !['HEAD', 'BODY', 'META', 'TITLE', 'LINK', 'SCRIPT', 'STYLE'].includes(n.tagName) && n.id !== 'snap' && n.id !== 'feed' && n.parentElement && !n.closest('head'));
   const custom = [...document.querySelectorAll('*')].filter(n => n.tagName.includes('-'));
   const all = [...new Set([...foreign, ...custom])];
   if (all.length) logEvent('extension_present', 'Elementy obce na stronie przy starcie (rozszerzenia)', all.slice(0, 5).map(describe).join(', '));
@@ -400,8 +406,36 @@ function lockInput() {
 function showStatus(st) {
   const el = $('pip-status'); if (!el || !exam) return;
   const face = st.faces === 1 ? 'twarz ✓' : st.faces === 0 ? 'brak twarzy' : `${st.faces} twarze`;
-  el.textContent = `Nadzór: ${face}, wzrok ${st.looking}` + (DEBUG ? ` · ${st.delegate} ${Math.round(st.faceMs || 0)}/${Math.round(st.objMs || 0)} ms co ${st.objEvery} · ${st.why} · tel ${Math.round(st.phone * 100)}% · ${st.objects.map(o => o.name + ' ' + Math.round(o.score * 100)).join(', ')}` : '');
+  const n = x => x == null ? '–' : x.toFixed(2), deg = x => x == null ? '–' : Math.round(x) + '°';
+  el.textContent = `Nadzór: ${face}, wzrok ${st.looking}` + (DEBUG ? ` · źr ${n(st.ih)}/${n(st.iv)} · gł ${deg(st.hyaw)}/${deg(st.hpitch)} · ${st.calibrated ? 'kalibr. 5 pkt' : 'kalibr. 1 pkt'} · ${st.delegate} ${Math.round(st.faceMs || 0)}/${Math.round(st.objMs || 0)} ms co ${st.objEvery} · ${st.why} · tel ${Math.round(st.phone * 100)}% · ${st.objects.map(o => o.name + ' ' + Math.round(o.score * 100)).join(', ')}` : '');
   document.querySelector('.pip').classList.toggle('alert', st.faces !== 1 || st.looking !== 'w ekran');
+}
+
+// Podgląd śledzenia (kadr na twarz + oczy) rysowany płynnie w każdej klatce.
+function startViews() {
+  const draw = () => {
+    if (proctor) {
+      if (!$('s-camera').classList.contains('hidden')) drawFaceView($('cam-view'), $('feed'), proctor);
+      if (exam && stream) drawFaceView($('pip-view'), $('feed'), proctor);
+    }
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+}
+
+// Kalibracja wzroku: 5 punktów (środek i rogi ekranu) – wyznacza zakres „patrzę w ekran” dla
+// źrenic i głowy tej konkretnej osoby. Spojrzenie poza ten zakres = patrzenie poza ekran.
+async function gazeCalibration() {
+  const pts = [[50, 50], [6, 8], [94, 8], [94, 92], [6, 92], [50, 50]];
+  show('s-calib');
+  const dot = $('calib-dot'), out = [];
+  for (const [x, y] of pts) {
+    dot.style.left = x + '%'; dot.style.top = y + '%';
+    dot.classList.remove('pulse'); void dot.offsetWidth; dot.classList.add('pulse');
+    await new Promise(r => setTimeout(r, 700));      // czas na przeniesienie wzroku
+    out.push(await proctor.collectPoint(1300));
+  }
+  return proctor.setBox(out);
 }
 
 let warnTimer;

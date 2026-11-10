@@ -78,7 +78,7 @@
   <!-- TEST KAMERY -->
   <section id="s-camera" class="screen card hidden">
     <h2>Test kamery i kalibracja</h2>
-    <div class="cam-wrap"><video id="cam-preview" autoplay playsinline muted></video></div>
+    <div class="cam-wrap"><video id="cam-preview" autoplay playsinline muted></video><canvas id="cam-view" width="240" height="180" title="Śledzenie twarzy i źrenic"></canvas></div>
     <ul id="checks" class="checks">
       <li id="ck-browser">Przeglądarka</li>
       <li id="ck-cam">Kamera</li>
@@ -111,7 +111,13 @@
     </div>
     <div id="warn" class="warn hidden"></div>
     <div id="watermark" class="watermark"></div>
-    <div class="pip"><video id="cam-exam" autoplay playsinline muted></video><span id="pip-status"></span></div>
+    <div class="pip"><canvas id="pip-view" width="240" height="180"></canvas><span id="pip-status"></span></div>
+  </section>
+
+  <!-- KALIBRACJA WZROKU -->
+  <section id="s-calib" class="screen hidden">
+    <div id="calib-dot" class="calib-dot"></div>
+    <p id="calib-text" class="calib-text">Patrz na zieloną kropkę, nie ruszając się z miejsca.</p>
   </section>
 
   <!-- WYNIK -->
@@ -127,7 +133,9 @@
   </section>
 
 </div>
-<canvas id="snap" width="320" height="240" class="hidden"></canvas>
+<canvas id="snap" width="384" height="216" class="hidden"></canvas>
+<!-- Strumień analizowany przez AI: zawsze „widoczny” dla przeglądarki (niewidoczny dla oka), żeby klatki nie były wstrzymywane. -->
+<video id="feed" class="feed" autoplay playsinline muted></video>
 <script type="module" src="app.js"></script>
 </body>
 </html>
