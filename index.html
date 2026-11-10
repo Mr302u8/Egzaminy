@@ -78,12 +78,14 @@
   <!-- TEST KAMERY -->
   <section id="s-camera" class="screen card hidden">
     <h2>Test kamery i kalibracja</h2>
+    <label class="hidden">Kamera <select id="cam-select"></select></label>
     <div class="cam-wrap"><video id="cam-preview" autoplay playsinline muted></video><canvas id="cam-view" width="240" height="180" title="Śledzenie twarzy i źrenic"></canvas></div>
     <ul id="checks" class="checks">
       <li id="ck-browser">Przeglądarka</li>
       <li id="ck-cam">Kamera</li>
       <li id="ck-models">Modele AI</li>
       <li id="ck-face">Jedna twarz w kadrze, patrzysz w ekran</li>
+      <li id="ck-quality">Jakość obrazu</li>
       <li id="ck-screens">Jeden monitor</li>
     </ul>
     <p class="small muted">Usiądź prosto, twarz na środku kadru, dobre oświetlenie z przodu. Na biurku nie powinno być telefonu ani kartek.</p>

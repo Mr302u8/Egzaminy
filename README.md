@@ -19,6 +19,13 @@ limitami czasu, losowaniem i nadzorem kamerą działającym w przeglądarce zdaj
   (macierz transformacji twarzy), kamera w 720p. Przed egzaminem kalibracja wzroku na 5 punktach
   ekranu (środek + rogi): wyznacza osobisty zakres „patrzę w ekran”, a spojrzenie poza niego
   (+ margines z `MARGINS` w `proctor.js`) jest zdarzeniem. Wykrywanie odsunięcia/przesunięcia twarzy.
+- Patrzenie w dół na telefon na kolanach / klawiaturze: także z opuszczenia powiek (otwarcie oka
+  spada przy patrzeniu w dół) – działa, nawet gdy telefonu nie widać w kadrze.
+- Osobne zdarzenia „w lewo” i „w prawo” (z perspektywy zdającego), ruch ust (mówienie/szeptanie),
+  analiza ok. 6–7 razy na sekundę z wygładzaniem (pojedyncze klatki nie gubią zdarzeń).
+- Każda kamera: próby 720p → 480p → dowolna rozdzielczość, wybór kamery (wbudowana/USB),
+  obliczenia w pikselach (4:3, 16:9), ocena jakości obrazu (światło na twarzy, rozmiar oka w px)
+  z jasnym komunikatem; przy małej rozdzielczości źrenice są pomijane, działa śledzenie głowy.
 - Podgląd śledzenia: kadr przybliżony na twarz z zaznaczonymi oczami i źrenicami
   (zielone = patrzy w ekran, czerwone = poza ekran).
 - Zdjęcie startowe w raporcie + oświadczenie o braku okularów/słuchawek z kamerą.

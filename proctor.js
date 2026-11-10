@@ -13,8 +13,10 @@ const OBJ_MODEL_LIGHT = 'https://storage.googleapis.com/mediapipe-models/object_
 export const RULES = {
   no_face:    { ms: 1500, label: 'Brak twarzy w kadrze' },
   multi_face: { ms: 800,  label: 'Więcej niż jedna twarz' },
-  look_down:  { ms: 1500, label: 'Patrzenie w dół (kartki / telefon na kolanach)' },
-  look_side:  { ms: 1500, label: 'Patrzenie w bok / poza ekran' },
+  look_down:  { ms: 1200, label: 'Patrzenie w dół (kartki / telefon na kolanach)' },
+  look_left:  { ms: 1200, label: 'Patrzenie w lewo (poza ekran)' },
+  look_right: { ms: 1200, label: 'Patrzenie w prawo (poza ekran)' },
+  talking:    { ms: 1500, label: 'Ruch ust (mówienie / szeptanie)' },
   look_up:    { ms: 2500, label: 'Patrzenie w górę' },
   phone:      { ms: 400,  label: 'Telefon w kadrze' },
   book:       { ms: 600,  label: 'Książka / kartki w kadrze' },
@@ -39,12 +41,13 @@ export const MARGINS = {
   ih: 0.07,     // poziome położenie źrenicy w oku (część szerokości oka)
   iv: 0.05,     // pionowe położenie źrenicy względem kącików oka (część szerokości oka)
   hyaw: 10,     // obrót głowy w bok, stopnie
-  hpitch: 9,    // pochylenie głowy, stopnie
+  hpitch: 7,    // pochylenie głowy, stopnie
   yaw: 0.06, pitch: 0.05, // położenie nosa w twarzy (zapas na wypadek błędu macierzy)
-  down: 0.25,   // blendshape „oczy w dół”
+  down: 0.15,   // blendshape „oczy w dół”
+  ear: 0.80,    // powieki: otwarcie oka poniżej 80% najmniejszego z kalibracji = wzrok w dół (telefon na kolanach / klawiaturze)
 };
 const REFIRE_MS = 8000; // trwająca sytuacja zgłaszana ponownie co 8 s
-const TICK_MS = 300;
+const TICK_MS = 150; // ok. 6–7 analiz twarzy na sekundę
 
 export class Proctor {
   constructor({ onEvent, onStatus, snapCanvas }) {
@@ -67,11 +70,7 @@ export class Proctor {
     this.vision = await import(`${MP_URL}/vision_bundle.mjs`);
     this.fileset = await this.vision.FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
     try { await this.build('GPU'); } catch (e) { console.warn('GPU niedostępne, CPU', e); await this.build('CPU'); }
-    const track = video.srcObject?.getVideoTracks?.()[0];
-    if (track) {
-      track.addEventListener('ended', () => this.fire('camera_off', 'strumień zakończony'));
-      track.addEventListener('mute', () => this.fire('camera_off', 'kamera przestała nadawać'));
-    }
+    this.attachTrack(video.srcObject?.getVideoTracks?.()[0]);
     this.loop = setInterval(() => this.step(), TICK_MS);
   }
 
@@ -99,6 +98,12 @@ export class Proctor {
     if (old && old !== this.obj) old.close?.();
   }
 
+  attachTrack(track) {
+    if (!track) return;
+    track.addEventListener('ended', () => this.fire('camera_off', 'strumień zakończony'));
+    track.addEventListener('mute', () => this.fire('camera_off', 'kamera przestała nadawać'));
+  }
+
   // Analizowany element <video> (podczas egzaminu – widoczny podgląd w rogu).
   setVideo(v) { this.video = v; }
 
@@ -114,10 +119,17 @@ export class Proctor {
       const faces = fr.faceLandmarks || [];
       this.last.faces = faces.length;
       this.last.lm = faces[0] || null;
-      this.last.f = faces.length ? features(faces[0], fr.faceBlendshapes?.[0]?.categories, fr.facialTransformationMatrixes?.[0]?.data) : null;
+      this.last.f = faces.length ? features(faces[0], fr.faceBlendshapes?.[0]?.categories, fr.facialTransformationMatrixes?.[0]?.data, v.videoWidth || 640, v.videoHeight || 480) : null;
       this.last.pose = this.last.f; this.last.gaze = this.last.f;
       this.last.faceMs = performance.now() - now;
       if (this.calib && this.last.faces === 1 && this.last.f) this.calib.push(this.last.f);
+      const F = this.last.f;
+      if (F) {
+        (this.mouthHist ||= []).push([now, F.mouth]);
+        // znak osi kąta z macierzy względem nosa (różne wersje modelu/kamery) – uczony na bieżąco
+        if (this.baseline && F.hyaw != null && Math.abs(F.yaw - this.baseline.yaw) > 0.05 && Math.abs(F.hyaw - this.baseline.hyaw) > 5)
+          this.yawSign = Math.sign((F.yaw - this.baseline.yaw) * (F.hyaw - this.baseline.hyaw));
+      }
       // Detekcja przedmiotów jest cięższa: uruchamiana co N kroków, N dobierane do szybkości komputera.
       if (this.tick % this.objEvery === 0) {
         const t0 = performance.now();
@@ -154,7 +166,9 @@ export class Proctor {
     this.cond('no_face', L.faces === 0 && !dark, now);
     this.cond('multi_face', L.faces >= 2, now, `${L.faces} twarze`);
     this.cond('look_down', dir.down, now, dir.why);
-    this.cond('look_side', dir.side, now, dir.why);
+    this.cond('look_left', dir.side && dir.lr === 'left', now, dir.why);
+    this.cond('look_right', dir.side && dir.lr === 'right', now, dir.why);
+    this.cond('talking', this.talking(), now, this.mouthWhy);
     this.cond('look_up', dir.up, now, dir.why);
     this.cond('phone', has('cell phone', LIMITS.phoneScore).length > 0 || has('remote', 0.5).length > 0, now, conf(has('cell phone', LIMITS.phoneScore)));
     this.cond('book', has('book', LIMITS.bookScore).length > 0, now, conf(has('book', LIMITS.bookScore)));
@@ -164,39 +178,65 @@ export class Proctor {
     this.cond('face_moved', !!dir.moved, now, dir.moved || '');
   }
 
-  // Kierunek patrzenia. Po kalibracji 5 punktów: czy źrenice, głowa lub nos wyszły poza zakres
-  // zmierzony przy patrzeniu na rogi ekranu (+ margines). Bez niej: odchylenie od pozycji startowej.
+  // Kierunek patrzenia. Po kalibracji 5 punktów: czy źrenice, głowa, nos albo powieki wyszły poza
+  // zakres zmierzony przy patrzeniu na rogi ekranu (+ margines). Bez niej: odchylenie od pozycji startowej.
+  // Lewo/prawo podawane z perspektywy zdającego (obraz z kamery nie jest lustrzany: +x obrazu = lewa strona osoby).
   direction() {
     const f = this.last.f, b = this.baseline, box = this.box;
-    const out = { down: false, side: false, up: false, why: '', moved: '' };
+    const out = { down: false, side: false, up: false, lr: '', why: '', moved: '' };
     if (!f || !b) return out;
-    const vDir = (f.pitch - b.pitch) + (f.iv - b.iv) >= 0 ? 'down' : 'up';
-    const hits = [];
+    const H = [], V = []; // [nazwa, wielkość, znak]: znak +1 = w lewo / w dół
+    const push = (k, lo, hi, m, sign) => {
+      const x = f[k]; if (x == null || Number.isNaN(x)) return;
+      if (x > hi + m) (sign.v ? V : H).push([k, x - hi, sign.v ? +1 : sign.h]);
+      else if (x < lo - m) (sign.v ? V : H).push([k, lo - x, sign.v ? -1 : -sign.h]);
+    };
     if (box) {
-      for (const k of ['ih', 'hyaw', 'yaw', 'iv', 'hpitch', 'pitch', 'down']) {
-        const [lo, hi] = box[k], m = MARGINS[k], x = f[k];
-        if (x == null || Number.isNaN(x)) continue;
-        if (x > hi + m || (k !== 'down' && x < lo - m)) hits.push([k, x > hi ? x - hi : lo - x]);
-      }
+      push('ih', ...box.ih, MARGINS.ih, { h: +1 });
+      push('yaw', ...box.yaw, MARGINS.yaw, { h: +1 });
+      push('hyaw', ...box.hyaw, MARGINS.hyaw, { h: this.yawSign || 0 });
+      push('iv', ...box.iv, MARGINS.iv, { v: 1 });
+      push('pitch', ...box.pitch, MARGINS.pitch, { v: 1 });
+      push('hpitch', ...box.hpitch, MARGINS.hpitch, { v: 1 });
+      if (f.down > box.down[1] + MARGINS.down) V.push(['down', f.down - box.down[1], +1]);
+      if (f.ear != null && box.ear[0] > 0 && f.ear < box.ear[0] * MARGINS.ear) V.push(['ear', 1 - f.ear / box.ear[0], +1]);
     } else {
-      if (f.pitch - b.pitch > LIMITS.headDown) hits.push(['pitch', f.pitch - b.pitch]);
-      if (b.pitch - f.pitch > LIMITS.headUp) hits.push(['pitch', b.pitch - f.pitch]);
-      if (Math.abs(f.yaw - b.yaw) > LIMITS.headSide) hits.push(['yaw', Math.abs(f.yaw - b.yaw)]);
-      if (f.down - b.down > LIMITS.eyesDown) hits.push(['down', f.down - b.down]);
-      if (f.side - b.side > LIMITS.eyesSide) hits.push(['side', f.side - b.side]);
+      const d = f.pitch - b.pitch;
+      if (d > LIMITS.headDown) V.push(['pitch', d, +1]);
+      if (-d > LIMITS.headUp) V.push(['pitch', -d, -1]);
+      if (Math.abs(f.yaw - b.yaw) > LIMITS.headSide) H.push(['yaw', Math.abs(f.yaw - b.yaw), Math.sign(f.yaw - b.yaw)]);
+      if (f.down - b.down > LIMITS.eyesDown) V.push(['down', f.down - b.down, +1]);
+      if (f.ear != null && b.ear && f.ear < b.ear * 0.72) V.push(['ear', 1 - f.ear / b.ear, +1]);
+      if (f.ih != null && b.ih != null && Math.abs(f.ih - b.ih) > 0.12) H.push(['ih', Math.abs(f.ih - b.ih), Math.sign(f.ih - b.ih)]);
     }
-    const NAMES = { ih: 'źrenice w bok', iv: 'źrenice', hyaw: 'głowa w bok', yaw: 'głowa w bok', hpitch: 'pochylenie głowy', pitch: 'pochylenie głowy', down: 'oczy w dół', side: 'oczy w bok' };
-    const horiz = hits.filter(([k]) => ['ih', 'hyaw', 'yaw', 'side'].includes(k));
-    const vert = hits.filter(([k]) => !['ih', 'hyaw', 'yaw', 'side'].includes(k));
+    const NAMES = { ih: 'źrenice', iv: 'źrenice', hyaw: 'głowa', yaw: 'głowa', hpitch: 'głowa', pitch: 'głowa', down: 'oczy', ear: 'powieki opuszczone', side: 'oczy' };
     const desc = list => list.map(([k, d]) => `${NAMES[k]} +${k.startsWith('h') ? Math.round(d) + '°' : d.toFixed(2)}`).join(', ');
-    if (vert.length && (vDir === 'down' || vert.some(([k]) => k === 'down'))) { out.down = true; out.why = desc(vert); }
-    else if (horiz.length) { out.side = true; out.why = desc(horiz); }
-    else if (vert.length) { out.up = true; out.why = desc(vert); }
+    const downV = V.filter(([, , sg]) => sg > 0), upV = V.filter(([, , sg]) => sg < 0);
+    // Głosowanie kierunku poziomego: suma znaków sygnałów (źrenice i nos mają znany kierunek).
+    const hVote = H.reduce((s, [, , sg]) => s + sg, 0);
+    if (downV.length) { out.down = true; out.why = 'w dół: ' + desc(downV); }
+    else if (H.length && hVote !== 0) { out.side = true; out.lr = hVote > 0 ? 'left' : 'right'; out.why = (hVote > 0 ? 'w lewo: ' : 'w prawo: ') + desc(H); }
+    else if (H.length) { out.side = true; out.lr = (f.yaw - b.yaw) > 0 ? 'left' : 'right'; out.why = 'w bok: ' + desc(H); }
+    else if (upV.length) { out.up = true; out.why = 'w górę: ' + desc(upV); }
     // Odsunięcie od kamery / przesunięcie twarzy (np. pochylanie się nad kartką obok laptopa).
     if (f.size / b.size < 0.65) out.moved = 'twarz dalej od kamery';
     else if (f.size / b.size > 1.6) out.moved = 'twarz bliżej kamery';
     else if (Math.hypot(f.cx - b.cx, f.cy - b.cy) > 0.22) out.moved = 'twarz przesunięta w kadrze';
     return out;
+  }
+
+  // Ruch ust: zmienność otwarcia szczęki/ust w ostatnich 2 s (mówienie, szeptanie, czytanie na głos).
+  talking() {
+    const now = performance.now(), h = this.mouthHist || [];
+    const recent = h.filter(([t]) => now - t < 2000);
+    this.mouthHist = recent;
+    if (recent.length < 6) return false;
+    const vals = recent.map(([, v]) => v);
+    const range = Math.max(...vals) - Math.min(...vals);
+    let turns = 0;
+    for (let i = 2; i < vals.length; i++) if ((vals[i] - vals[i - 1]) * (vals[i - 1] - vals[i - 2]) < 0 && Math.abs(vals[i] - vals[i - 1]) > 0.015) turns++;
+    this.mouthWhy = `zmiana otwarcia ust ${range.toFixed(2)}, ${turns} ruchów w 2 s`;
+    return range > 0.08 && turns >= 3;
   }
 
   // Kalibracja wzroku: zdający patrzy kolejno na punkty ekranu; zbieramy medianę cech dla każdego.
@@ -214,7 +254,7 @@ export class Proctor {
     const ok = points.filter(Boolean);
     if (ok.length < 4) { this.box = null; return false; }
     this.box = {};
-    for (const k of Object.keys(MARGINS)) {
+    for (const k of [...Object.keys(MARGINS), 'ear']) {
       const vals = ok.map(p => p[k]).filter(x => x != null && !Number.isNaN(x));
       this.box[k] = vals.length ? [Math.min(...vals), Math.max(...vals)] : [-Infinity, Infinity];
     }
@@ -235,10 +275,17 @@ export class Proctor {
     return true;
   }
 
+  // Wygładzanie: sytuacja „trwa”, gdy występuje w ≥60% klatek z ostatnich 0,8 s, a kończy się
+  // dopiero poniżej 30% – pojedyncze klatki (mrugnięcie, chwilowy błąd modelu) nie resetują licznika.
   cond(type, active, now, detail = '') {
-    const s = this.state[type] || (this.state[type] = { since: null, fired: 0 });
-    if (!active) { s.since = null; s.fired = 0; return; }
+    const s = this.state[type] || (this.state[type] = { since: null, fired: 0, hist: [] });
+    s.hist.push([now, active]);
+    while (s.hist.length && now - s.hist[0][0] > 800) s.hist.shift();
+    const ratio = s.hist.filter(([, a]) => a).length / s.hist.length;
+    const on = s.since === null ? (active && ratio >= 0.6) : ratio >= 0.3;
+    if (!on) { s.since = null; s.fired = 0; return; }
     if (s.since === null) s.since = now;
+    if (!active) return;
     if (now - s.since >= RULES[type].ms && now - s.fired >= REFIRE_MS) {
       s.fired = now;
       this.fire(type, detail);
@@ -255,16 +302,19 @@ export class Proctor {
     const phone = L.objects.filter(o => o.name === 'cell phone').reduce((m, o) => Math.max(m, o.score), 0);
     return {
       ok: L.errors === 0, delegate: this.delegate + (this.light ? ' lite0' : ' lite2'), faces: L.faces,
-      looking: d.down ? 'w dół' : d.side ? 'w bok' : d.up ? 'w górę' : 'w ekran',
+      looking: d.down ? 'w dół' : d.side ? (d.lr === 'left' ? 'w lewo' : 'w prawo') : d.up ? 'w górę' : 'w ekran',
+      mouth: f.mouth, ear: f.ear,
       why: d.why, calibrated: !!this.box,
-      ih: f.ih, iv: f.iv, hyaw: f.hyaw, hpitch: f.hpitch, phone, objects: L.objects, brightness: L.brightness, faceMs: L.faceMs, objMs: L.objMs, objEvery: this.objEvery,
+      ih: f.ih, iv: f.iv, eyePx: f.eyePx, facePx: f.facePx, res: this.video ? `${this.video.videoWidth}×${this.video.videoHeight}` : '', hyaw: f.hyaw, hpitch: f.hpitch, phone, objects: L.objects, brightness: L.brightness, faceMs: L.faceMs, objMs: L.objMs, objEvery: this.objEvery,
     };
   }
 
   snapshot() {
     try {
-      const c = this.snap, ctx = c.getContext('2d');
-      ctx.drawImage(this.video, 0, 0, c.width, c.height);
+      const c = this.snap, v = this.video;
+      if (v.videoWidth) { c.width = 384; c.height = Math.round(384 * v.videoHeight / v.videoWidth); }
+      const ctx = c.getContext('2d');
+      ctx.drawImage(v, 0, 0, c.width, c.height);
       return c.toDataURL('image/jpeg', 0.6);
     } catch { return null; }
   }
@@ -272,7 +322,15 @@ export class Proctor {
   brightness() {
     const c = this._bc || (this._bc = Object.assign(document.createElement('canvas'), { width: 32, height: 24 }));
     const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(this.video, 0, 0, 32, 24);
+    // Jasność liczona na twarzy (gdy jest widoczna), a nie na całym kadrze – ciemne tło lub
+    // czarne pasy obrazu nie zaniżają wyniku.
+    const v = this.video, lm = this.last.faces ? this.last.lm : null;
+    if (lm && v.videoWidth) {
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+      for (const p of lm) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+      const sx = Math.max(0, x0) * v.videoWidth, sy = Math.max(0, y0) * v.videoHeight;
+      ctx.drawImage(v, sx, sy, Math.max(4, (Math.min(1, x1) - Math.max(0, x0)) * v.videoWidth), Math.max(4, (Math.min(1, y1) - Math.max(0, y0)) * v.videoHeight), 0, 0, 32, 24);
+    } else ctx.drawImage(v, 0, 0, 32, 24);
     const d = ctx.getImageData(0, 0, 32, 24).data;
     let sum = 0;
     for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
@@ -289,13 +347,18 @@ const EYES = [
   { a: 33, b: 133, top: 159, bot: 145 },   // jedno oko: kąciki i powieki
   { a: 362, b: 263, top: 386, bot: 374 },  // drugie oko
 ];
-function features(lm, cats, mtx) {
+// Minimalna szerokość oka w pikselach, przy której położenie źrenicy jest wiarygodne.
+export const MIN_EYE_PX = 14;
+function features(lm0, cats, mtx, vw, vh) {
+  // Przeliczenie na piksele: geometria nie zależy od proporcji obrazu (4:3, 16:9, pionowy).
+  const lm = lm0.map(p => ({ x: p.x * vw, y: p.y * vh }));
   const nose = lm[1], left = lm[234], right = lm[454], top = lm[10], chin = lm[152];
   const f = {
     yaw: (nose.x - left.x) / ((right.x - left.x) || 1e-6),
     pitch: (nose.y - top.y) / ((chin.y - top.y) || 1e-6),
-    cx: (left.x + right.x) / 2, cy: (top.y + chin.y) / 2,
-    size: Math.hypot(right.x - left.x, chin.y - top.y),
+    cx: (left.x + right.x) / 2 / vw, cy: (top.y + chin.y) / 2 / vh,
+    size: Math.hypot(right.x - left.x, chin.y - top.y) / Math.min(vw, vh), // rozmiar twarzy względem krótszego boku
+    facePx: Math.hypot(right.x - left.x, chin.y - top.y),
   };
   // Źrenice: położenie środka tęczówki między kącikami oka (poziomo) i względem linii kącików (pionowo).
   if (lm.length >= 478) {
@@ -312,8 +375,12 @@ function features(lm, cats, mtx) {
       hs.push(((iris.x - L.x) * ux + (iris.y - L.y) * uy) / w);
       vs.push(((iris.x - mid.x) * -uy + (iris.y - mid.y) * ux) / w);
     }
+    f.ear = EYES.reduce((s, e) => s + Math.hypot(lm[e.top].x - lm[e.bot].x, lm[e.top].y - lm[e.bot].y) / (Math.hypot(lm[e.a].x - lm[e.b].x, lm[e.a].y - lm[e.b].y) || 1e-6), 0) / 2;
+    f.eyePx = EYES.reduce((s, e) => s + Math.hypot(lm[e.a].x - lm[e.b].x, lm[e.a].y - lm[e.b].y), 0) / 2;
     f.ih = (hs[0] + hs[1]) / 2;
     f.iv = (vs[0] + vs[1]) / 2;
+    // Za mało pikseli na oko (słaba kamera / daleko) – źrenice pomijamy, zostaje głowa i blendshapes.
+    if (f.eyePx < MIN_EYE_PX) { f.ih = null; f.iv = null; }
   }
   // Kąty głowy z macierzy transformacji twarzy (kolumnowa 4x4).
   if (mtx && mtx.length === 16) {
@@ -324,8 +391,9 @@ function features(lm, cats, mtx) {
   if (cats) {
     const s = Object.fromEntries(cats.map(c => [c.categoryName, c.score]));
     f.down = ((s.eyeLookDownLeft || 0) + (s.eyeLookDownRight || 0)) / 2;
+    f.mouth = Math.max(s.jawOpen || 0, ((s.mouthLowerDownLeft || 0) + (s.mouthLowerDownRight || 0) + (s.mouthUpperUpLeft || 0) + (s.mouthUpperUpRight || 0)) / 4);
     f.side = Math.max(((s.eyeLookOutLeft || 0) + (s.eyeLookInRight || 0)) / 2, ((s.eyeLookInLeft || 0) + (s.eyeLookOutRight || 0)) / 2);
-  } else { f.down = 0; f.side = 0; }
+  } else { f.down = 0; f.side = 0; f.mouth = 0; }
   return f;
 }
 function median(samples) {

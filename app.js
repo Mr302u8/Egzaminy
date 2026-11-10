@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 const LS_CFG = 'egz_config', LS_REP = 'egz_reports';
 const WEIGHTS = {
   no_face: 3, multi_face: 5, phone: 5, book: 4, person: 5, dark: 4, camera_off: 5,
-  look_down: 2, look_side: 2, look_up: 1, frozen: 4, face_moved: 2, calibration_failed: 2, pointer_unlock: 2, start_photo: 0,
+  look_down: 2, look_left: 2, look_right: 2, talking: 2, look_up: 1, frozen: 4, face_moved: 2, calibration_failed: 2, pointer_unlock: 2, start_photo: 0,
   tab_hidden: 3, focus_lost: 2, fullscreen_exit: 3, clipboard: 1, blocked_key: 1,
   dom_injection: 3, extension_present: 2, multi_monitor: 3, window_resized: 1,
 };
@@ -174,16 +174,12 @@ async function setupCamera() {
     await checkScreens(); $('btn-start').disabled = false; return;
   }
   try {
-    // Wyższa rozdzielczość = więcej pikseli na oko (źrenice). 720p obsługuje praktycznie każda kamera laptopa.
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: 'user' }, audio: false });
-    $('cam-preview').srcObject = stream;
-    $('feed').srcObject = stream;
-    await Promise.all([$('cam-preview').play(), $('feed').play()]);
-    mark('ck-cam', true, 'Kamera: OK');
+    await openCamera(localStorage.getItem('egz_cam') || undefined);
   } catch (e) {
-    mark('ck-cam', false, 'Kamera: brak dostępu – zezwól na kamerę w pasku adresu i odśwież stronę');
+    mark('ck-cam', false, cameraError(e));
     return;
   }
+  await fillCameraList();
   $('cam-msg').textContent = 'Ładowanie modeli AI (pierwszy raz kilka–kilkanaście sekund)…';
   try {
     proctor = new Proctor({ onEvent: ev => logEvent(ev.type, ev.label, ev.detail, ev.img), onStatus: showStatus, snapCanvas: $('snap') });
@@ -198,20 +194,107 @@ async function setupCamera() {
     return;
   }
   await checkScreens();
-  // Czekamy na dokładnie jedną twarz i kalibrujemy pozycję głowy.
+  await calibrateFace();
+}
+
+// Kamera: najpierw próbujemy wyższej rozdzielczości (więcej pikseli na oko), a gdy kamera jej nie
+// obsługuje – coraz skromniejszych ustawień, aż do „dowolny obraz”. Nic nie jest wymagane na sztywno.
+const CAMERA_TRIES = [
+  { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  { width: { ideal: 640 }, height: { ideal: 480 } },
+  {},
+];
+async function openCamera(deviceId) {
+  let lastErr;
+  for (const c of CAMERA_TRIES) {
+    const video = { ...c, ...(deviceId ? { deviceId: { ideal: deviceId } } : { facingMode: 'user' }) };
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: Object.keys(video).length ? video : true, audio: false });
+      stream?.getTracks().forEach(t => t.stop());
+      stream = s;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e; // brak zgody – nie ma sensu próbować dalej
+    }
+  }
+  if (!stream || stream.getVideoTracks()[0]?.readyState !== 'live') throw lastErr || new Error('Brak obrazu z kamery');
+  $('cam-preview').srcObject = stream;
+  $('feed').srcObject = stream;
+  await Promise.all([$('cam-preview').play(), $('feed').play()]);
+  const st = stream.getVideoTracks()[0].getSettings();
+  const w = st.width || $('feed').videoWidth, h = st.height || $('feed').videoHeight;
+  const label = stream.getVideoTracks()[0].label || 'kamera';
+  const low = Math.min(w, h) < 360;
+  mark('ck-cam', true, `Kamera: OK – ${label} (${w}×${h})` + (low ? ' – niska rozdzielczość, usiądź bliżej' : ''));
+  if (low) $('ck-cam').className = 'warn';
+  proctor?.attachTrack(stream.getVideoTracks()[0]);
+}
+
+function cameraError(e) {
+  const n = e?.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'Kamera: brak zgody – kliknij ikonę kamery w pasku adresu, wybierz „Zezwalaj” i odśwież stronę.';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'Kamera: nie znaleziono kamery – podłącz kamerę i odśwież stronę.';
+  if (n === 'NotReadableError' || n === 'AbortError') return 'Kamera: jest zajęta przez inny program (Zoom, Teams, FaceTime…) – zamknij go i odśwież stronę.';
+  return 'Kamera: nie udało się uruchomić (' + (e?.message || n || 'nieznany błąd') + ')';
+}
+
+// Wybór kamery, gdy jest ich kilka (wbudowana, USB, wirtualna).
+async function fillCameraList() {
+  const sel = $('cam-select');
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  sel.parentElement.classList.toggle('hidden', cams.length < 2);
+  const current = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+  sel.innerHTML = '';
+  cams.forEach((c, i) => {
+    const o = document.createElement('option');
+    o.value = c.deviceId; o.textContent = c.label || `Kamera ${i + 1}`;
+    if (c.deviceId === current) o.selected = true;
+    sel.append(o);
+  });
+}
+$('cam-select').addEventListener('change', async e => {
+  $('btn-start').disabled = true;
+  try {
+    await openCamera(e.target.value);
+    try { localStorage.setItem('egz_cam', e.target.value); } catch {}
+    if (proctor) await calibrateFace();
+  } catch (err) { mark('ck-cam', false, cameraError(err)); }
+});
+
+// Kalibracja pozycji + ocena jakości obrazu (światło, rozdzielczość, odległość).
+async function calibrateFace() {
   $('cam-msg').textContent = 'Patrz w ekran – kalibracja…';
-  for (let i = 0; i < 20; i++) {
+  mark('ck-face', false, 'Szukam twarzy…'); $('ck-face').className = '';
+  for (let i = 0; i < 25; i++) {
     if (proctor.last.faces === 1 && await proctor.calibrate()) {
-      const bad = proctor.last.objects.filter(o => o.name === 'cell phone' || o.name === 'book');
       mark('ck-face', true, 'Twarz i kalibracja: OK');
-      $('cam-msg').textContent = bad.length ? 'Uwaga: w kadrze widać telefon lub książkę. Usuń je z biurka.' : 'Wszystko gotowe.';
-      $('btn-start').disabled = false;
+      const q = qualityReport();
+      $('cam-msg').textContent = q.msg;
+      $('btn-start').disabled = q.block;
       return;
     }
-    mark('ck-face', false, proctor.last.faces > 1 ? 'W kadrze jest więcej niż jedna osoba' : 'Nie widzę twarzy – popraw kamerę lub światło');
+    const dark = proctor.last.brightness !== undefined && proctor.last.brightness < 40;
+    mark('ck-face', false, proctor.last.faces > 1 ? 'W kadrze jest więcej niż jedna osoba' : dark ? 'Za ciemno – zapal światło przed sobą (nie za plecami)' : 'Nie widzę twarzy – ustaw kamerę na wysokości oczu i usiądź na wprost');
     await new Promise(r => setTimeout(r, 1000));
   }
-  $('cam-msg').textContent = 'Nie udało się skalibrować. Odśwież stronę i spróbuj ponownie.';
+  $('cam-msg').textContent = 'Nie udało się skalibrować. Popraw światło i pozycję albo wybierz inną kamerę, potem odśwież stronę.';
+}
+
+function qualityReport() {
+  const L = proctor.last, f = L.f || {}, v = $('feed');
+  const notes = [];
+  let block = false, warn = false;
+  // Twarz została już wykryta i skalibrowana, więc ciemny obraz tylko ostrzega (nie blokuje).
+  if (L.brightness !== undefined && L.brightness < 70) { notes.push('Twarz jest słabo oświetlona – zapal światło przed sobą (nie za plecami), wykrywanie będzie dokładniejsze.'); warn = true; }
+  if (f.eyePx !== undefined && f.eyePx < 14) { notes.push(`Oczy są za małe na obrazie (${Math.round(f.eyePx)} px) – usiądź bliżej kamery. Śledzenie źrenic będzie wyłączone, działa śledzenie głowy.`); warn = true; }
+  if (f.size !== undefined && f.size < 0.18) { notes.push('Twarz jest daleko od kamery – przysuń się.'); warn = true; }
+  if (Math.min(v.videoWidth, v.videoHeight) < 240) { notes.push('Kamera ma bardzo niską rozdzielczość – wybierz inną, jeśli masz.'); warn = true; }
+  const bad = L.objects.filter(o => o.name === 'cell phone' || o.name === 'book');
+  if (bad.length) notes.push('W kadrze widać telefon lub książkę – usuń je z biurka.');
+  mark('ck-quality', !block && !warn, block ? 'Jakość obrazu: za słaba' : warn ? 'Jakość obrazu: wystarczająca, ale można poprawić' : `Jakość obrazu: dobra (${v.videoWidth}×${v.videoHeight}, oko ${Math.round(f.eyePx || 0)} px)`);
+  if (warn && !block) $('ck-quality').className = 'warn';
+  return { block, msg: notes.length ? notes.join(' ') : 'Wszystko gotowe.' };
 }
 
 async function checkScreens() {
@@ -407,7 +490,7 @@ function showStatus(st) {
   const el = $('pip-status'); if (!el || !exam) return;
   const face = st.faces === 1 ? 'twarz ✓' : st.faces === 0 ? 'brak twarzy' : `${st.faces} twarze`;
   const n = x => x == null ? '–' : x.toFixed(2), deg = x => x == null ? '–' : Math.round(x) + '°';
-  el.textContent = `Nadzór: ${face}, wzrok ${st.looking}` + (DEBUG ? ` · źr ${n(st.ih)}/${n(st.iv)} · gł ${deg(st.hyaw)}/${deg(st.hpitch)} · ${st.calibrated ? 'kalibr. 5 pkt' : 'kalibr. 1 pkt'} · ${st.delegate} ${Math.round(st.faceMs || 0)}/${Math.round(st.objMs || 0)} ms co ${st.objEvery} · ${st.why} · tel ${Math.round(st.phone * 100)}% · ${st.objects.map(o => o.name + ' ' + Math.round(o.score * 100)).join(', ')}` : '');
+  el.textContent = `Nadzór: ${face}, wzrok ${st.looking}` + (DEBUG ? ` · źr ${n(st.ih)}/${n(st.iv)} · pow ${n(st.ear)} · usta ${n(st.mouth)} · gł ${deg(st.hyaw)}/${deg(st.hpitch)} · ${st.calibrated ? 'kalibr. 5 pkt' : 'kalibr. 1 pkt'} · ${st.delegate} ${Math.round(st.faceMs || 0)}/${Math.round(st.objMs || 0)} ms co ${st.objEvery} · ${st.why} · tel ${Math.round(st.phone * 100)}% · ${st.objects.map(o => o.name + ' ' + Math.round(o.score * 100)).join(', ')}` : '');
   document.querySelector('.pip').classList.toggle('alert', st.faces !== 1 || st.looking !== 'w ekran');
 }
 
@@ -462,7 +545,7 @@ function logEvent(type, label, detail = '', img = null) {
   exam.events.push(ev);
   if (DEBUG) window.__events = exam.events;
   if (type === 'start_photo') return;
-  const camera = ['no_face', 'multi_face', 'look_down', 'look_side', 'look_up', 'phone', 'book', 'person', 'dark', 'frozen', 'camera_off'].includes(type);
+  const camera = ['no_face', 'multi_face', 'look_down', 'look_left', 'look_right', 'look_up', 'talking', 'face_moved', 'phone', 'book', 'person', 'dark', 'frozen', 'camera_off'].includes(type);
   if (camera) {
     document.querySelector('.pip').classList.add('alert');
     setTimeout(() => document.querySelector('.pip')?.classList.remove('alert'), 3000);
